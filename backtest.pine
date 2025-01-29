@@ -1,0 +1,94 @@
+// © lenoguedesg
+//@version=5
+//strategy(title="Modelo Operacional", shorttitle="Trade System", overlay=true, precision=2, pyramiding=0,
+//     default_qty_type = strategy.cash, initial_capital=1000,
+//     calc_on_every_tick = true, calc_on_order_fills = true)
+strategy(title="Modelo Operacional 2", shorttitle="Trade System", overlay=true, precision=2,
+     pyramiding=0, calc_on_order_fills=true, calc_on_every_tick=true, 
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=200)
+//INPUTS. 
+riscoMaxPercentual = input.float(defval=15, title="Risco Máximo, %")
+parcial = input.float(defval=1.6, title="Parcial", options=[1, 1.6, 2, 3])
+startDate = input.int(defval=27, title="Dia de início", minval=1, maxval=31, step=1)
+startMonth = input.int(defval=2, title="Mês de início", minval=1, maxval=12, step=1)
+startYear = input.int(defval=2022, title="Ano de início")
+periodo = input.session(defval="1800-2359", title="Período", options=["0000-2359", "1800-2359"])
+endDate = input.int(defval=31, title="Dia de fim", minval=1, maxval=31, step=1)
+endMonth = input.int(defval=12, title="Mês de fim", minval=1, maxval=12, step=1)
+endYear = input.int(defval=2030, title="Ano de fim")
+ema_rapida = input.int(defval=9, title="-- Média Curta")
+ema_normal = input.int(defval=21, title="-- Média Intermediária")
+ema_longa= input.int(defval=144, title="-- Média Longa")
+ema1 = ta.ema(close, ema_rapida)
+ema2 = ta.ema(close, ema_normal)
+ema3 = ta.ema(close, ema_longa)
+//MÉDIAS PLOTADAS
+a = plot(ema1, title="Média Rápida", color = color.gray, linewidth = 1)
+b = plot(ema2, title="Média Normal", color = color.gray, linewidth = 3)
+plot(ema3, title="Média Lenta", color = color.black, linewidth = 5)
+fill (a, b, color=color.new(color.blue, 90), title="Colorindo as Emas")
+//MÉDIAS ASCENDENTES
+ema1_asc = ema1 > ema2 and ta.ema(close[0], ema_rapida) > ta.ema(close[1], ema_rapida)
+ema2_asc = ema2 > ema3 and ta.ema(close[0], ema_normal) > ta.ema(close[1], ema_normal)
+ema3_asc = ta.ema(close[0],ema_longa) > ta.ema(close[1], ema_longa)
+emas_asc = ema1_asc and ema2_asc and ema3_asc
+//SINAIS DE COMPRA
+rpFechamento = low[0] < low[1] and low[0] < low[2] and close[0] > close[1] and close > ema1 and open > ema2 
+insideBar = high[0] < high[1] and low[0] > low[1] and emas_asc and close > ema1 and open > ema2
+
+// sinal_compra = rpFechamento and emas_asc
+// sinal_compra = emas_asc and insideBar
+sinal_compra = emas_asc and insideBar or rpFechamento and emas_asc
+
+// PARA O SINAL NAO APARECER NO MEIO DE OPERAÇÃO. FOI FEITO ISSO PARA A LINHA DO ESTOPE NÃO SUBIR
+if (strategy.position_avg_price != 0)    
+    sinal_compra := false
+
+//SINAL DE SAÍDA OU AJUSTE DE ESTOPE
+sinal_saida = close < ema1 and strategy.position_avg_price != 0
+
+//AQUI DEVE FICAR TODAS AS VARIAVEIS USADAS PARA CALCULOS
+var precoEntrada = float(na)
+var estope = float(na)
+var estopeEma9 = float(na)
+var risco = float(na)
+var sizeCandle = float(na)
+var maxCandle = float(na)
+capitalAtual = (strategy.initial_capital + strategy.netprofit + strategy.openprofit)
+
+//INFORMAÇÕES TIRADAS APÓS SINAL DE ENTRADA
+if (sinal_compra or sinal_saida)
+    estope := low
+    maxCandle := high  
+    risco := strategy.position_avg_price - estope
+    sizeCandle := maxCandle - estope
+    estopeEma9 := low
+
+// TAMANHO DE POSIÇÃO
+qtd = capitalAtual * riscoMaxPercentual / 100 / sizeCandle
+//qtd = capitalAtual * 1/3 / sizeCandle
+meiaQtd = (qtd/2)
+
+// NÍVEIS DE ESTOPE
+stop = estope - syminfo.mintick
+alvoP = maxCandle + (parcial * sizeCandle)
+alvo9 = estopeEma9 - syminfo.mintick
+
+// NÍVEIS DE ESTOPE PLOTADOS E CANDLES SINAIS
+barcolor(sinal_compra ? color.green : sinal_saida ? color.red : na)
+plot(strategy.position_avg_price, color = color.black, style = plot.style_linebr)
+plot(strategy.position_avg_price > 0 ? estope : na, color = color.orange, style = plot.style_linebr, offset=0)
+plot(strategy.position_avg_price > 0 ? alvo9 : na, color = color.blue, style = plot.style_linebr)
+
+//RANGE PARA O BACKTEST
+inDateRange = (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 21, 00)) and (time < timestamp(syminfo.timezone, endYear, endMonth, endDate, 02, 59))
+
+//ROTEAMENTO
+if (inDateRange and sinal_compra)
+    strategy.order("C", strategy.long, stop=maxCandle+syminfo.mintick, oca_name="ocaboa", oca_type=strategy.oca.reduce)
+if (inDateRange)
+    strategy.exit("V1", "C", qty_percent=100, limit=alvoP, stop=stop, oca_name="ocaboa")
+//    strategy.exit("V2", "C", qty_percent=100, stop=stop, oca_name="ocaboa")
+//    strategy.exit("V3", "C", qty_percent=100, stop=alvo9, oca_name="ocaboa")
+if (not inDateRange)
+    strategy.close_all()
